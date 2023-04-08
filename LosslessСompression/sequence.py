@@ -274,12 +274,218 @@ class RLE_LZW:
         self.plot(results)
 
 
+class AC_CH:
+    def __init__(self):
+        self.__origins = []
+        with open('./results/sequence.txt', 'r', encoding='utf-8') as f:
+            for i in f:
+                self.__origins.append(i[:10])
+
+    def origin_sequence(self, sequence):
+        sequence_length = len(sequence)
+        unique_chars = set(sequence)
+        sequence_alphabet_size = len(unique_chars)
+        counts = collections.Counter(sequence)
+        n_sequence = 10
+        probability = {symbol: count / n_sequence for symbol, count in counts.items()}
+        entropy = -sum(p * math.log2(p) for p in probability.values())
+        if entropy == 0:
+            entropy = 0
+        else:
+            entropy = round(entropy, 4)
+        return entropy, unique_chars, probability, sequence_alphabet_size, sequence_length
+
+    def float_bin(self, point, size_cod):
+        binary_code = ""
+        for x in range(size_cod):
+            point = point * 2
+            if point > 1:
+                binary_code = binary_code + str(1)
+                x = int(point)
+                point = point - x
+            elif point < 1:
+                binary_code = binary_code + str(0)
+            else:
+                binary_code = binary_code + str(1)
+        return binary_code
+
+    def encode_ac(self, unique_chars, probabilitys, alphabet_size, sequence):
+        alphabet = list(unique_chars)
+        probability = [probabilitys[symbol] for symbol in alphabet]
+        unity = []
+        probability_range = 0.0
+        for i in range(alphabet_size):
+            l = probability_range
+            probability_range = probability_range + probability[i]
+            u = probability_range
+            unity.append([alphabet[i], l, u])
+        for i in range(len(sequence) - 1):
+            for j in range(len(unity)):
+                if sequence[i] == unity[j][0]:
+                    probability_low = unity[j][1]
+                    probability_high = unity[j][2]
+                    diff = probability_high - probability_low
+                    for k in range(len(unity)):
+                        unity[k][1] = probability_low
+                        unity[k][2] = probability[k] * diff + probability_low
+                        probability_low = unity[k][2]
+                    break
+        low = 0
+        high = 0
+        for i in range(len(unity)):
+            if unity[i][0] == sequence[-1]:
+                low = unity[i][1]
+                high = unity[i][2]
+        point = (low + high) / 2
+        size_cod = math.ceil(math.log((1 / (high - low)), 2) + 1)
+        bin_code = self.float_bin(point, size_cod)
+        return [point, alphabet_size, alphabet, probability], bin_code
+
+    def decode_ac(self, encoded_data_ac, sequence_length):
+        point, alphabet_size, alphabet, probability = encoded_data_ac
+        unity = []
+        probability_range = 0.0
+        for i in range(alphabet_size):
+            l = probability_range
+            probability_range = probability_range + probability[i]
+            u = probability_range
+            unity.append([alphabet[i], l, u])
+        decoded_sequence = ""
+        for i in range(sequence_length):
+            for j in range(len(unity)):
+                if unity[j][1] < point < unity[j][2]:
+                    prob_low = unity[j][1]
+                    prob_high = unity[j][2]
+                    diff = prob_high - prob_low
+                    decoded_sequence = decoded_sequence + unity[j][0]
+                    for k in range(len(unity)):
+                        unity[k][1] = prob_low
+                        unity[k][2] = probability[k] * diff + prob_low
+                        prob_low = unity[k][2]
+                    break
+        return decoded_sequence
+
+    def encode_ch(self, unique_chars, probabilities, sequence):
+        alphabet = list(unique_chars)
+        probability = [probabilities[symbol] for symbol in alphabet]
+        final = []
+        for i in range(len(alphabet)):
+            final.append([alphabet[i], probability[i]])
+        final.sort(key=lambda x: x[1])
+        tree = []
+        if len(set(probability)) == 1:
+            symbol_code = []
+            for i in range(len(alphabet)):
+                code = "1" * i + "0"
+                symbol_code.append([alphabet[i], code])
+            encode = "".join([symbol_code[alphabet.index(c)][1] for c in sequence])
+        else:
+            while len(final) > 1:
+                left = final.pop(0)
+                right = final.pop(0)
+                tot = left[1] + right[1]
+                tree.append([left[0], right[0]])
+                final.append([left[0] + right[0], tot])
+                final.sort(key=lambda x: x[1])
+            symbol_code = []
+            tree.reverse()
+            alphabet.sort()
+            for i in range(len(alphabet)):
+                code = ""
+                for j in range(len(tree)):
+                    if alphabet[i] in tree[j][0]:
+                        code = code + '0'
+                        if alphabet[i] == tree[j][0]:
+                            break
+                    else:
+                        code = code + '1'
+                        if alphabet[i] == tree[j][1]:
+                            break
+                symbol_code.append([alphabet[i], code])
+            encode = ""
+            for c in sequence:
+                encode += [symbol_code[i][1] for i in range(len(alphabet)) if
+                           symbol_code[i][0] == c][0]
+        return [encode, symbol_code], encode
+
+    def decode_ch(self, encoded_sequence):
+        encode = list(encoded_sequence[0])
+        symbol_code = encoded_sequence[1]
+        count = 0
+        flag = 0
+        sequence = ""
+        for i in range(len(encode)):
+            for j in range(len(symbol_code)):
+                if encode[i] == symbol_code[j][1]:
+                    sequence = sequence + str(symbol_code[j][0])
+                    flag = 1
+            if flag == 1:
+                flag = 0
+            else:
+                count = count + 1
+                if count == len(encode):
+                    break
+                else:
+                    encode.insert(i + 1, str(encode[i] + encode[i + 1]))
+                encode.pop(i + 2)
+        return sequence
+
+    def plot(self, results):
+        fig, ax = plt.subplots(figsize=(14 / 1.54, 8 / 1.54))
+        headers = ['Ентропія', 'bps AC', 'bps HC']
+        row = ['Послідовність 1', 'Послідовність 2', 'Послідовність 3', 'Послідовність 4', 'Послідовність 5',
+               'Послідовність 6', 'Послідовність 7', 'Послідовність 8']
+        ax.axis('off')
+        table = ax.table(cellText=results, colLabels=headers, rowLabels=row,
+                         loc='center', cellLoc='center')
+        table.set_fontsize(14)
+        table.scale(0.8, 2)
+        fig.savefig(f"./results/Результати стиснення методами AC та CH.png", dpi=600)
+
+    def main(self):
+        result = []
+        with open('./results/results_AC_CH.txt', 'w', encoding='utf-8') as f:
+            pass
+        for sequence in self.__origins:
+            entropy, unique_chars, probability, alphabet_size, sequence_length = self.origin_sequence(sequence)
+            with open('./results/results_AC_CH.txt', 'a', encoding='utf-8') as f:
+                f.write(f"""{'/' * 70}
+    Послідовність {self.__origins.index(sequence) + 1}
+Оригінальна послідовність: {sequence}
+Ентропія: {entropy}""")
+            encoded_data_ac, encoded_sequence_ac = self.encode_ac(unique_chars,
+                                                                  probability, alphabet_size, sequence)
+            bps_ac = len(encoded_sequence_ac) / sequence_length
+            decoded_sequence_ac = self.decode_ac(encoded_data_ac, sequence_length)
+            encoded_data_hc, encoded_sequence_hc = self.encode_ch(unique_chars, probability, sequence)
+            bps_hc = len(encoded_sequence_hc) / sequence_length
+            decoded_sequence_hc = self.decode_ch(encoded_data_hc)
+            with open('./results/results_AC_CH.txt', 'a', encoding='utf-8') as f:
+                f.write(f"""\n\n{10 * "_"} Арифметичне кодування {10 * "_"}
+Дані закодованої АС послідовності: {encoded_data_ac}
+Закодована АС послідовність: {encoded_sequence_ac}
+Значення bps при кодуванні АС: {bps_ac}
+Декодована АС послідовність: {decoded_sequence_ac}\n\n""")
+                f.write(f"""{10 * "_"} Кодування Хаффмана {10 * "_"}
+Алфавіт     Код символу\n""")
+                for i, j in encoded_data_hc[1]:
+                    f.write(f"{i}           {j}\n")
+                f.write(f"""Дані закодованої НС послідовності: {encoded_data_hc}
+Закодована НС послідовність: {encoded_sequence_hc}
+Значення bps при кодуванні НС: {bps_hc}
+Декодована НС послідовність: {decoded_sequence_hc}\n\n""")
+                result.append([round(entropy, 2), bps_ac, bps_hc])
+        self.plot(result)
+
+
 if __name__ == "__main__":
     num, index, surname, group, pi, p_letters, p_digits = 100, 6, "Zharikov".lower(), "529a", 0.2, 0.3, 0.7
-    choice = "2"
+    choice = "3"
     if choice == "1":
         Generated_sequences(num, index, surname, group, pi, p_letters, p_digits).main()
     elif choice == "2":
         with open('./results/results_rle_lzw.txt', 'w', encoding='utf-8') as f:
             pass
         RLE_LZW().main()
+    elif choice == "3":
+        AC_CH().main()
