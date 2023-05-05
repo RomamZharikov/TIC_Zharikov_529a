@@ -56,6 +56,8 @@ def load_quantization_table(component, num_table):
                           [99, 99, 99, 99, 99, 99, 99, 99],
                           [99, 99, 99, 99, 99, 99, 99, 99],
                           [99, 99, 99, 99, 99, 99, 99, 99]])
+        else:
+            raise ValueError(" компонент має бути 'lum' або 'chrom', але '{comp}' знайдено".format(comp=component))
     else:
         raise ValueError(" номер таблиці має бути '1' або '2', але '{comp}' знайдено".format(comp=num_table))
     return q
@@ -189,7 +191,7 @@ def write_to_file(filepath, dc, ac, blocks_count, tables):
 
 def encode(input_name, output_name, table_num):
     input_file = f"./input_image/{input_name}.bmp"
-    output_file = f"./output_image/{output_name}.asf"
+    output_file = f"./Results/{output_name}.asf"
     image = Image.open(input_file)
     ycbcr = image.convert('YCbCr')
     npmat = np.array(ycbcr, dtype=np.uint8)
@@ -200,7 +202,6 @@ def encode(input_name, output_name, table_num):
         raise ValueError("ширина і висота зображення мають бути кратними 8")
     dc = np.empty((blocks_count, 3), dtype=np.int32)
     ac = np.empty((blocks_count, 63, 3), dtype=np.int32)
-    print(table_num)
     for i in range(0, rows, 8):
         for j in range(0, cols, 8):
             try:
@@ -226,14 +227,19 @@ def encode(input_name, output_name, table_num):
               'ac_y': H_AC_Y.value_to_bitstring_table(),
               'dc_c': H_DC_C.value_to_bitstring_table(),
               'ac_c': H_AC_C.value_to_bitstring_table()}
-    write_to_file(f"{output_file[:-4]}_{table_num}{output_file[-4:]}", dc, ac, blocks_count, tables)
+    write_to_file(f"{output_file[:-4]}_{input_name}_{table_num}{output_file[-4:]}", dc, ac, blocks_count, tables)
 
 
-def len_vyhsdnogo(input_file):
+def len_vyhsdnogo(input_file, action="num"):
     size_vyhsdnogo = os.path.getsize(f"./input_image/{input_file}.bmp")
-    with open("results_jpeg.txt", "w", encoding='utf-8') as file:
-        print('Розмір вихідного файла: {} байт'.format(size_vyhsdnogo), file=file)
-    return size_vyhsdnogo
+    if action == "write":
+        with open("results_jpeg.txt", "a", encoding='utf-8') as file:
+            print('Розмір вихідного файла: {} байт\n'.format(size_vyhsdnogo), file=file)
+        return None
+    elif action == "num":
+        return size_vyhsdnogo
+    else:
+        raise ValueError("action повинен бути 'write' та 'num'")
 
 
 class JPEGFileReader:
@@ -319,25 +325,17 @@ def read_image_file(filepath):
             ac_table = tables['ac_y'] if component == 0 else tables['ac_c']
             category = reader.read_huffman_code(dc_table)
             dc[block_index, component] = reader.read_int(category)
-            cells_count = 0
-            # TODO: спроба зробити читання AC коефіцієнтів краще
-            while cells_count < 63:
+            ac_coefficients = []
+            while len(ac_coefficients) < 63:
                 run_length, size = reader.read_huffman_code(ac_table)
                 if (run_length, size) == (0, 0):
-                    while cells_count < 63:
-                        ac[block_index, cells_count, component] = 0
-                        cells_count += 1
+                    ac_coefficients += [0] * (63 - len(ac_coefficients))
                 else:
-                    for i in range(run_length):
-                        ac[block_index, cells_count, component] = 0
-                        cells_count += 1
-                        if size == 0:
-                            ac[block_index, cells_count, component] = 0
-                        else:
-                            value = reader.read_int(size)
-                            ac[block_index, cells_count, component] = value
-                        cells_count += 1
-            return dc, ac, tables, blocks_count
+                    ac_coefficients += [0] * run_length
+                    value = reader.read_int(size)
+                    ac_coefficients.append(value)
+            ac[block_index, :, component] = np.array(ac_coefficients)
+    return dc, ac, tables, blocks_count
 
 
 def zigzag_to_block(zigzag):
@@ -360,7 +358,7 @@ def idct_2d(image):
 
 
 def decoder(input_bmp, input_asf, num_table):
-    dc, ac, tables, blocks_count = read_image_file(f"./output_image/{input_asf}_{num_table}.asf")
+    dc, ac, tables, blocks_count = read_image_file(f"./Results/{input_asf}_{input_bmp}_{num_table}.asf")
     block_side = 8
     image_side = int(math.sqrt(blocks_count)) * block_side
     blocks_per_line = image_side // block_side
@@ -376,19 +374,36 @@ def decoder(input_bmp, input_asf, num_table):
             npmat[i:i + 8, j:j + 8, c] = block + 128
     image = Image.fromarray(npmat, 'YCbCr')
     image = image.convert('RGB')
-    filename = f"./output_image/JPEG_{num_table}_{input_bmp}.jpg"
+    filename = f"./Results/JPEG_{num_table}_{input_bmp}.jpg"
     image.save(filename)
     size_jpeg = os.path.getsize(filename)
     width, height = image.size
     ratio = len_vyhsdnogo(input_bmp) / size_jpeg
     with open("results_jpeg.txt", "a", encoding='utf-8') as file:
-        print('Розмір файла JPEG: {} байт'.format(size_jpeg), '\n',
-              f'Розмір зображення JPEG: {width}x{height}', file=file)
+        print(f'Розмір файла JPEG: {size_jpeg} байт \nРозмір зображення JPEG: {width}x{height}', file=file)
         print('Коефіцієнт стиснення= {:.2f}'.format(ratio), '\n', file=file)
 
 
+def get_file_names(directory):
+    files = os.listdir(directory)
+    file_names = []
+    for file in files:
+        file_name = os.path.splitext(file)[0]
+        file_names.append(file_name)
+    return file_names
+
+
 if __name__ == "__main__":
-    len_vyhsdnogo("6_1")
-    for i in range(1, 3):
-        encode("6_1", "results_jpeg", i)
-        decoder("6_1", "results_jpeg", i)
+    with open("results_jpeg.txt", "w", encoding='utf-8') as file:
+        pass
+    files = get_file_names("input_image")
+    for name in files:
+        with open("results_jpeg.txt", "a", encoding='utf-8') as file:
+            print('=' * 70, file=file)
+            print(' ' * 5, f'Зображення {files.index(name) + 1}: {name}.bmp', file=file)
+        len_vyhsdnogo(name, action="write")
+        for i in range(1, 3):
+            with open("results_jpeg.txt", "a", encoding='utf-8') as file:
+                print(f'Таблиця квантування №{i}:\n', file=file)
+            encode(name, "results_jpeg", i)
+            decoder(name, "results_jpeg", i)
